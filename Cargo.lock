@@ -916,6 +916,7 @@ dependencies = [
 name = "sfc"
 version = "0.1.0"
 dependencies = [
+ "ariadne",
  "bumpalo",
  "clap",
  "mago-database",
@@ -926,7 +927,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "termcolor",
  "thiserror",
  "toml",
 ]

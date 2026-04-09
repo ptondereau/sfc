@@ -1,6 +1,24 @@
+use std::ops::Range;
+use std::path::Path;
+
 use crate::model::{Container, ServiceRole};
 
 use super::{AnalysisPass, Finding, Impact, Severity};
+
+fn find_class_span(path: &Path) -> Option<Range<usize>> {
+    let content = std::fs::read_to_string(path).ok()?;
+    // Find "class " at the start of a line to skip comments containing "class"
+    for (offset, line) in content.split('\n').scan(0usize, |pos, line| {
+        let start = *pos;
+        *pos += line.len() + 1;
+        Some((start, line))
+    }) {
+        if line.trim_start().starts_with("class ") {
+            return Some(offset..offset + line.len());
+        }
+    }
+    None
+}
 
 pub struct AlwaysLoadedVotersPass;
 
@@ -20,6 +38,11 @@ impl AnalysisPass for AlwaysLoadedVotersPass {
                 .any(|r| matches!(r, ServiceRole::Voter));
 
             if is_voter && !service.lazy {
+                let span = service
+                    .factory_file
+                    .as_ref()
+                    .and_then(|p| find_class_span(p));
+
                 findings.push(Finding {
                     pass: self.name(),
                     severity: Severity::Info,
@@ -29,6 +52,7 @@ impl AnalysisPass for AlwaysLoadedVotersPass {
                     ),
                     service_id: Some(service.id.clone()),
                     file: service.factory_file.clone(),
+                    span,
                     impact: Impact::Startup { estimated_ms: 1 },
                     fix: Some(format!(
                         "# config/services.yaml\nservices:\n    {}:\n        lazy: true",

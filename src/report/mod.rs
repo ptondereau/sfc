@@ -43,6 +43,7 @@ mod tests {
             message: "test".to_owned(),
             service_id: None,
             file: None,
+            span: None,
             impact: Impact::None,
             fix: None,
         }

@@ -56,6 +56,7 @@ impl AnalysisPass for DeadServicesPass {
                     ),
                     service_id: Some(service_id.clone()),
                     file: service.factory_file.clone(),
+                    span: None,
                     impact: Impact::Memory {
                         estimated_bytes: 512,
                     },

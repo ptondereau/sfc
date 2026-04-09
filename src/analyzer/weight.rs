@@ -51,6 +51,7 @@ impl AnalysisPass for ContainerWeightPass {
             ),
             service_id: None,
             file: None,
+            span: None,
             impact: Impact::Memory {
                 estimated_bytes: total,
             },
@@ -64,6 +65,7 @@ impl AnalysisPass for ContainerWeightPass {
                 message: format!("service `{id}`: ~{weight} bytes"),
                 service_id: Some(crate::model::ServiceId::new(*id)),
                 file: None,
+                span: None,
                 impact: Impact::Memory {
                     estimated_bytes: *weight,
                 },

@@ -33,6 +33,7 @@ impl AnalysisPass for DeadRoutesPass {
                     ),
                     service_id: None,
                     file: None,
+                    span: None,
                     impact: Impact::None,
                     fix: None,
                 });

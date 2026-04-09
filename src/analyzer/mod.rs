@@ -4,6 +4,7 @@ pub mod routes;
 pub mod voters;
 pub mod weight;
 
+use std::ops::Range;
 use std::path::PathBuf;
 
 use crate::model::ServiceId;
@@ -20,6 +21,7 @@ pub struct Finding {
     pub message: String,
     pub service_id: Option<ServiceId>,
     pub file: Option<PathBuf>,
+    pub span: Option<Range<usize>>,
     pub impact: Impact,
     pub fix: Option<String>,
 }

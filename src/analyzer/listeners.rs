@@ -54,6 +54,7 @@ impl AnalysisPass for UnusedListenersPass {
                         ),
                         service_id: Some(service.id.clone()),
                         file: service.factory_file.clone(),
+                        span: None,
                         impact: Impact::Memory { estimated_bytes: 512 },
                         fix: None,
                     });
