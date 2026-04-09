@@ -3,7 +3,7 @@ use clap::{Arg, Command};
 #[must_use]
 pub fn build() -> Command {
     Command::new("sfc")
-        .version("0.1.0")
+        .version(env!("CARGO_PKG_VERSION"))
         .about("Symfony Companion CLI — post-build analysis for Symfony projects")
         .subcommand_required(true)
         .subcommand(
