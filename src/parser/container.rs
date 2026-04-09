@@ -264,15 +264,36 @@ fn extract_factory_info(block: &Block<'_>, factory_path: &Path, container: &mut 
     }
 
     if let Some(sid) = service_id {
-        if let Some(class) = &class_name
-            && let Some(&idx) = container.services.get(&sid)
-        {
+        if let Some(&idx) = container.services.get(&sid) {
             let svc = &mut container.graph[idx];
-            svc.class.clone_from(class);
+            if let Some(class) = &class_name {
+                svc.class.clone_from(class);
+            }
             svc.factory_file = Some(factory_path.to_path_buf());
+        } else {
+            let _ = container.add_service(Service {
+                id: sid.clone(),
+                class: class_name.unwrap_or_default(),
+                factory_file: Some(factory_path.to_path_buf()),
+                tags: vec![],
+                visibility: Visibility::Private,
+                lazy: false,
+                roles: vec![],
+            });
         }
 
         for dep_id in &deps {
+            if !container.services.contains_key(dep_id) {
+                let _ = container.add_service(Service {
+                    id: dep_id.clone(),
+                    class: String::new(),
+                    factory_file: None,
+                    tags: vec![],
+                    visibility: Visibility::Private,
+                    lazy: false,
+                    roles: vec![],
+                });
+            }
             container.add_dependency(&sid, dep_id, EdgeKind::Constructor);
         }
     }

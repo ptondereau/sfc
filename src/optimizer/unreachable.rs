@@ -1,187 +1,204 @@
-use std::collections::HashSet;
-use std::hash::BuildHasher;
-use std::path::Path;
+use std::collections::{HashSet, VecDeque};
 
-use super::OptimizeError;
-use super::rewrite::find_main_container;
-use super::util::identify_factory_service;
+use petgraph::Direction;
 
-/// Extracts method names from `$this->fileMap` in the main container.
+use crate::model::{Container, ServiceId, Visibility};
+
+/// Finds services whose factory files are unreachable from any runtime entry point.
 ///
-/// Services in `fileMap` are public non-hot-path services resolved by
-/// `Container::make()` via `$this->load($this->fileMap[$id])`. This is a
-/// dynamic dispatch — the method name never appears as a literal
-/// `load('methodName')` call, so the string search alone misses them.
-fn extract_filemap_methods(container_dir: &Path) -> HashSet<String> {
-    let mut methods = HashSet::new();
+/// Walks the parsed dependency graph starting from entry points (public services,
+/// kernel-referenced services, alias targets, services with roles, controllers)
+/// and follows all outgoing constructor/method-call edges transitively. Any service
+/// with a factory file that is never visited is unreachable and safe to remove.
+#[must_use]
+pub fn find_unreachable_factories(container: &Container) -> HashSet<String> {
+    let visited = bfs_from_entry_points(container);
 
-    let Ok(main_file) = find_main_container(container_dir) else {
-        return methods;
-    };
-    let Ok(content) = std::fs::read_to_string(&main_file) else {
-        return methods;
-    };
-
-    let mut in_filemap = false;
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.contains("$this->fileMap") {
-            in_filemap = true;
-            continue;
-        }
-        if in_filemap {
-            if trimmed == "];" {
-                break;
-            }
-            // Lines look like: 'service.id' => 'getServiceIdService',
-            if let Some(arrow) = trimmed.find("=> '") {
-                let after_arrow = &trimmed[arrow + 4..];
-                if let Some(end) = after_arrow.find('\'') {
-                    methods.insert(after_arrow[..end].to_owned());
-                }
-            }
+    let mut unreachable = HashSet::new();
+    for (service_id, &node_idx) in &container.services {
+        let service = &container.graph[node_idx];
+        if service.factory_file.is_some() && !visited.contains(service_id) {
+            unreachable.insert(service_id.0.clone());
         }
     }
 
-    methods
+    unreachable
 }
 
-/// # Errors
-/// Returns `OptimizeError` if the container directory cannot be read.
-pub fn find_unreachable_factories<S: BuildHasher>(
-    container_dir: &Path,
-    already_removed: &HashSet<String, S>,
-) -> Result<HashSet<String>, OptimizeError> {
-    let mut factories: Vec<(String, String)> = Vec::new();
-    let mut all_content = String::new();
+fn bfs_from_entry_points(container: &Container) -> HashSet<ServiceId> {
+    let alias_targets: HashSet<&ServiceId> = container.aliases.values().collect();
 
-    // Single pass: collect factory metadata and concatenate PHP content
-    let entries = std::fs::read_dir(container_dir)?;
-    for entry in entries.filter_map(Result::ok) {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("php") {
-            continue;
+    let mut visited: HashSet<ServiceId> = HashSet::new();
+    let mut queue: VecDeque<ServiceId> = VecDeque::new();
+
+    for (service_id, &node_idx) in &container.services {
+        let service = &container.graph[node_idx];
+
+        let is_entry = service.visibility == Visibility::Public
+            || container.kernel_referenced.contains(service_id)
+            || alias_targets.contains(service_id)
+            || service.has_role()
+            || is_controller(&service.class);
+
+        if is_entry {
+            visited.insert(service_id.clone());
+            queue.push_back(service_id.clone());
         }
-        let Ok(content) = std::fs::read_to_string(&path) else {
+    }
+
+    while let Some(current) = queue.pop_front() {
+        let Some(&node_idx) = container.services.get(&current) else {
             continue;
         };
 
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        if name_str.starts_with("get") && name_str.ends_with("Service.php") {
-            let method_name = name_str.trim_end_matches(".php").to_owned();
-            if let Some(id) = identify_factory_service(&path)
-                && !already_removed.contains(&id)
-            {
-                factories.push((method_name, id));
+        for neighbor_idx in container
+            .graph
+            .neighbors_directed(node_idx, Direction::Outgoing)
+        {
+            let neighbor = &container.graph[neighbor_idx];
+            if visited.insert(neighbor.id.clone()) {
+                queue.push_back(neighbor.id.clone());
             }
         }
-
-        all_content.push_str(&content);
     }
 
-    // fileMap entries are reachable via Container::make() dynamic dispatch
-    let filemap_methods = extract_filemap_methods(container_dir);
+    visited
+}
 
-    // A factory method name that appears as a quoted string anywhere in the
-    // container code is reachable. Known call sites:
-    //   - load('getXService')            — lazy inline pattern
-    //   - fileMap entries                 — Container::make() dynamic dispatch
-    //   - ServiceLocator constructor     — ['privates', 'id', 'getXService', true]
-    //   - getService() third argument    — Container::getService(..., 'getXService', ...)
-    let mut unreachable = HashSet::new();
-    for (method_name, service_id) in &factories {
-        if filemap_methods.contains(method_name) {
-            continue;
-        }
-        let quoted_ref = format!("'{method_name}'");
-        if !all_content.contains(&quoted_ref) {
-            unreachable.insert(service_id.clone());
-        }
-    }
-
-    Ok(unreachable)
+fn is_controller(class: &str) -> bool {
+    class.contains("\\Controller\\")
 }
 
 #[cfg(test)]
+#[allow(unused_must_use)]
 mod tests {
-    use std::collections::HashSet;
-    use std::fs;
+    use std::path::PathBuf;
 
     use super::*;
+    use crate::model::{EdgeKind, Service};
 
-    #[test]
-    fn detects_unreachable_factory() {
-        let dir = tempfile::tempdir().unwrap();
+    fn make_service(id: &str, class: &str, vis: Visibility) -> Service {
+        Service {
+            id: ServiceId::new(id),
+            class: class.to_owned(),
+            factory_file: Some(PathBuf::from(format!("get{}Service.php", id))),
+            tags: vec![],
+            visibility: vis,
+            lazy: false,
+            roles: vec![],
+        }
+    }
 
-        fs::write(
-            dir.path().join("getUnreachableService.php"),
-            "<?php\n$container->privates['unreachable'] = new \\Foo();",
-        )
-        .unwrap();
-
-        fs::write(
-            dir.path().join("getReachableService.php"),
-            "<?php\n$container->privates['reachable'] = new \\Bar();",
-        )
-        .unwrap();
-
-        fs::write(
-            dir.path().join("getConsumerService.php"),
-            "<?php\n$container->privates['consumer'] = new \\Baz($container->privates['reachable'] ?? $container->load('getReachableService'));",
-        )
-        .unwrap();
-
-        let unreachable = find_unreachable_factories(dir.path(), &HashSet::new()).unwrap();
-        assert!(unreachable.contains("unreachable"));
-        assert!(!unreachable.contains("reachable"));
-        assert!(unreachable.contains("consumer"));
+    fn make_service_no_file(id: &str, class: &str, vis: Visibility) -> Service {
+        Service {
+            id: ServiceId::new(id),
+            class: class.to_owned(),
+            factory_file: None,
+            tags: vec![],
+            visibility: vis,
+            lazy: false,
+            roles: vec![],
+        }
     }
 
     #[test]
-    fn filemap_entries_are_reachable() {
-        let dir = tempfile::tempdir().unwrap();
+    fn public_services_and_deps_are_reachable() {
+        let mut c = Container::new(PathBuf::from("/tmp"));
+        c.add_service(make_service("pub.svc", "PubService", Visibility::Public));
+        c.add_service(make_service("dep.a", "DepA", Visibility::Private));
+        c.add_service(make_service("dep.b", "DepB", Visibility::Private));
+        c.add_service(make_service("orphan", "Orphan", Visibility::Private));
+        c.add_dependency(
+            &ServiceId::new("pub.svc"),
+            &ServiceId::new("dep.a"),
+            EdgeKind::Constructor,
+        );
+        c.add_dependency(
+            &ServiceId::new("dep.a"),
+            &ServiceId::new("dep.b"),
+            EdgeKind::Constructor,
+        );
 
-        // Factory for a public service listed in fileMap
-        fs::write(
-            dir.path().join("getPublicCacheService.php"),
-            "<?php\n$container->services['cache.app'] = new \\CachePool();",
-        )
-        .unwrap();
-
-        // Factory for a private service NOT in fileMap and NOT load()'d
-        fs::write(
-            dir.path().join("getInternalHelperService.php"),
-            "<?php\n$container->privates['internal.helper'] = new \\Helper();",
-        )
-        .unwrap();
-
-        // Main container with fileMap referencing the public service
-        let main = format!(
-            "{}{}",
-            r#"<?php
-class App_AppKernelProdContainer extends Container
-{
-    public function __construct()
-    {
-        $this->fileMap = [
-            'cache.app' => 'getPublicCacheService',
-        ];
+        let unreachable = find_unreachable_factories(&c);
+        assert!(!unreachable.contains("pub.svc"));
+        assert!(!unreachable.contains("dep.a"));
+        assert!(!unreachable.contains("dep.b"));
+        assert!(
+            unreachable.contains("orphan"),
+            "orphan has no path from entry points"
+        );
     }
-}
-"#,
-            "x".repeat(5000)
-        );
-        fs::write(dir.path().join("App_AppKernelProdContainer.php"), &main).unwrap();
 
-        let unreachable = find_unreachable_factories(dir.path(), &HashSet::new()).unwrap();
+    #[test]
+    fn kernel_referenced_is_entry_point() {
+        let mut c = Container::new(PathBuf::from("/tmp"));
+        c.add_service(make_service("kernel.dep", "KernelDep", Visibility::Private));
+        c.kernel_referenced.insert(ServiceId::new("kernel.dep"));
+
+        let unreachable = find_unreachable_factories(&c);
+        assert!(!unreachable.contains("kernel.dep"));
+    }
+
+    #[test]
+    fn alias_target_is_entry_point() {
+        let mut c = Container::new(PathBuf::from("/tmp"));
+        c.add_service(make_service("mailer", "Mailer", Visibility::Private));
+        c.aliases
+            .insert(ServiceId::new("MailerInterface"), ServiceId::new("mailer"));
+
+        let unreachable = find_unreachable_factories(&c);
+        assert!(!unreachable.contains("mailer"));
+    }
+
+    #[test]
+    fn services_without_factory_file_ignored() {
+        let mut c = Container::new(PathBuf::from("/tmp"));
+        c.add_service(make_service_no_file("inline", "Inline", Visibility::Public));
+        c.add_service(make_service("orphan", "Orphan", Visibility::Private));
+
+        let unreachable = find_unreachable_factories(&c);
         assert!(
-            !unreachable.contains("cache.app"),
-            "fileMap service must be treated as reachable"
+            !unreachable.contains("inline"),
+            "no factory file = nothing to remove"
         );
-        assert!(
-            unreachable.contains("internal.helper"),
-            "private service without load() reference is unreachable"
+        assert!(unreachable.contains("orphan"));
+    }
+
+    #[test]
+    fn transitive_deps_reached() {
+        let mut c = Container::new(PathBuf::from("/tmp"));
+        c.add_service(make_service("root", "Root", Visibility::Public));
+        c.add_service(make_service("mid", "Mid", Visibility::Private));
+        c.add_service(make_service("leaf", "Leaf", Visibility::Private));
+        c.add_service(make_service("island", "Island", Visibility::Private));
+
+        c.add_dependency(
+            &ServiceId::new("root"),
+            &ServiceId::new("mid"),
+            EdgeKind::Constructor,
         );
+        c.add_dependency(
+            &ServiceId::new("mid"),
+            &ServiceId::new("leaf"),
+            EdgeKind::Constructor,
+        );
+
+        let unreachable = find_unreachable_factories(&c);
+        assert!(unreachable.is_empty() || unreachable == HashSet::from(["island".to_owned()]));
+        assert!(!unreachable.contains("leaf"));
+        assert!(unreachable.contains("island"));
+    }
+
+    #[test]
+    fn controller_is_entry_point() {
+        let mut c = Container::new(PathBuf::from("/tmp"));
+        c.add_service(make_service(
+            "App\\Controller\\HomeController",
+            "App\\Controller\\HomeController",
+            Visibility::Private,
+        ));
+
+        let unreachable = find_unreachable_factories(&c);
+        assert!(!unreachable.contains("App\\Controller\\HomeController"));
     }
 }

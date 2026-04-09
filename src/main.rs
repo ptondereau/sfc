@@ -187,8 +187,7 @@ fn cmd_optimize(args: &clap::ArgMatches) -> Result<i32, Box<dyn std::error::Erro
     all_removed_methods.extend(level1.removed_methods);
 
     if level >= 2 {
-        let unreachable =
-            optimizer::unreachable::find_unreachable_factories(&container_dir, &all_removed)?;
+        let unreachable = optimizer::unreachable::find_unreachable_factories(&container);
         let level2 = optimizer::dead::remove_dead_services(&container_dir, &unreachable, dry_run)?;
         result.level2_files_removed = level2.files_removed;
         result.level2_bytes_freed = level2.bytes_freed;
