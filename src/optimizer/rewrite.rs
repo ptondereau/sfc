@@ -14,6 +14,11 @@ pub fn rewrite_maps<S: BuildHasher>(
     let main_file = find_main_container(container_dir)?;
     let content = std::fs::read_to_string(&main_file)?;
 
+    let prefixes: Vec<(String, String)> = removed_ids
+        .iter()
+        .map(|id| (format!("'{id}'"), format!("\"{id}\"")))
+        .collect();
+
     let mut removed_count = 0;
     let mut new_lines = Vec::new();
     let mut in_map = false;
@@ -26,8 +31,8 @@ pub fn rewrite_maps<S: BuildHasher>(
         }
 
         if in_map {
-            let should_remove = removed_ids.iter().any(|id| {
-                trimmed.starts_with(&format!("'{id}'")) || trimmed.starts_with(&format!("\"{id}\""))
+            let should_remove = prefixes.iter().any(|(single, double)| {
+                trimmed.starts_with(single.as_str()) || trimmed.starts_with(double.as_str())
             });
 
             if should_remove {

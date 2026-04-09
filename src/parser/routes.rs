@@ -9,6 +9,8 @@ use mago_syntax::parser::parse_file;
 use crate::model::RouteDefinition;
 use crate::parser::ParseError;
 
+use super::util::extract_string_value;
+
 /// # Errors
 /// Returns `ParseError` if the route file exists but cannot be parsed.
 pub fn parse_routes(cache_dir: &Path) -> Result<Vec<RouteDefinition>, ParseError> {
@@ -183,13 +185,6 @@ fn extract_array_keys(elements: &[ArrayElement<'_>]) -> Vec<String> {
         }
     }
     keys
-}
-
-fn extract_string_value(expr: &Expression<'_>) -> Option<String> {
-    match expr {
-        Expression::Literal(Literal::String(s)) => s.value.map(ToOwned::to_owned),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

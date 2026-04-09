@@ -1,4 +1,4 @@
-use crate::model::Container;
+use crate::model::{Container, ServiceId};
 
 use super::{AnalysisPass, Finding, Impact, Severity};
 
@@ -19,8 +19,9 @@ impl AnalysisPass for DeadRoutesPass {
                 .next()
                 .unwrap_or(&route.controller);
 
-            let exists = container.services.keys().any(|id| id.0 == controller_class);
-            let aliased = container.aliases.keys().any(|id| id.0 == controller_class);
+            let key = ServiceId::new(controller_class);
+            let exists = container.services.contains_key(&key);
+            let aliased = container.aliases.contains_key(&key);
 
             if !exists && !aliased {
                 findings.push(Finding {

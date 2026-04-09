@@ -2,6 +2,7 @@ pub mod backup;
 pub mod dead;
 pub mod rewrite;
 pub mod unreachable;
+pub mod util;
 
 use thiserror::Error;
 

@@ -13,6 +13,8 @@ use petgraph::graph::NodeIndex;
 use crate::model::{Container, ServiceId, ServiceRole};
 use crate::parser::ParseError;
 
+use super::util::{extract_string_value, find_do_method_body};
+
 /// # Errors
 /// Returns `ParseError` if factory files cannot be read.
 pub fn infer_roles(container_dir: &Path, container: &mut Container) -> Result<(), ParseError> {
@@ -287,46 +289,6 @@ fn infer_voters(container: &mut Container) {
 
     for idx in voter_indices {
         container.graph[idx].roles.push(ServiceRole::Voter);
-    }
-}
-
-fn find_do_method_body<'a>(
-    statements: &'a mago_syntax::ast::Sequence<'a, Statement<'a>>,
-) -> Option<&'a mago_syntax::ast::Block<'a>> {
-    for stmt in statements {
-        if let Statement::Namespace(ns) = stmt {
-            for inner in ns.statements() {
-                if let Statement::Class(class) = inner {
-                    return find_method_body_by_name(&class.members, "do");
-                }
-            }
-        }
-        if let Statement::Class(class) = stmt {
-            return find_method_body_by_name(&class.members, "do");
-        }
-    }
-    None
-}
-
-fn find_method_body_by_name<'a>(
-    members: &'a mago_syntax::ast::Sequence<'a, mago_syntax::ast::ClassLikeMember<'a>>,
-    name: &str,
-) -> Option<&'a mago_syntax::ast::Block<'a>> {
-    for member in members {
-        if let mago_syntax::ast::ClassLikeMember::Method(method) = member
-            && method.name.value == name
-            && let mago_syntax::ast::MethodBody::Concrete(block) = &method.body
-        {
-            return Some(block);
-        }
-    }
-    None
-}
-
-fn extract_string_value(expr: &Expression<'_>) -> Option<String> {
-    match expr {
-        Expression::Literal(Literal::String(s)) => s.value.map(ToOwned::to_owned),
-        _ => None,
     }
 }
 

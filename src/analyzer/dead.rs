@@ -1,6 +1,6 @@
 use petgraph::Direction;
 
-use crate::model::{Container, Visibility};
+use crate::model::{Container, ServiceId, Visibility};
 
 use super::{AnalysisPass, Finding, Impact, Severity};
 
@@ -17,6 +17,8 @@ impl AnalysisPass for DeadServicesPass {
 
     fn run(&self, container: &Container) -> Vec<Finding> {
         let mut findings = vec![];
+        let alias_targets: std::collections::HashSet<&ServiceId> =
+            container.aliases.values().collect();
 
         for (service_id, &node_idx) in &container.services {
             let service = &container.graph[node_idx];
@@ -42,10 +44,7 @@ impl AnalysisPass for DeadServicesPass {
                 .neighbors_directed(node_idx, Direction::Incoming)
                 .count();
 
-            let is_alias_target = container
-                .aliases
-                .values()
-                .any(|target| target == service_id);
+            let is_alias_target = alias_targets.contains(service_id);
 
             if in_degree == 0 && !is_alias_target {
                 findings.push(Finding {

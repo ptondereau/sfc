@@ -71,7 +71,18 @@ fn is_symfony_project(composer_path: &Path) -> bool {
     let Ok(content) = std::fs::read_to_string(composer_path) else {
         return false;
     };
-    content.contains("symfony/framework-bundle")
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+    let has_in_require = json
+        .get("require")
+        .and_then(|r| r.get("symfony/framework-bundle"))
+        .is_some();
+    let has_in_require_dev = json
+        .get("require-dev")
+        .and_then(|r| r.get("symfony/framework-bundle"))
+        .is_some();
+    has_in_require || has_in_require_dev
 }
 
 fn has_compiled_container(cache_dir: &Path) -> bool {

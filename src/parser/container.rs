@@ -14,6 +14,8 @@ use mago_syntax::parser::parse_file;
 use crate::model::{Container, EdgeKind, Service, ServiceId, Visibility};
 use crate::parser::ParseError;
 
+use super::util::{extract_string_value, find_do_method_body, find_method_body_by_name};
+
 /// # Errors
 /// Returns `ParseError` if the main container file cannot be found or parsed.
 pub fn parse_main_container(
@@ -150,39 +152,6 @@ fn find_constructor_body<'a>(
     })
 }
 
-fn find_method_body_by_name<'a>(
-    members: &'a mago_syntax::ast::Sequence<'a, ClassLikeMember<'a>>,
-    name: &str,
-) -> Option<&'a Block<'a>> {
-    for member in members {
-        if let ClassLikeMember::Method(method) = member
-            && method.name.value == name
-            && let MethodBody::Concrete(block) = &method.body
-        {
-            return Some(block);
-        }
-    }
-    None
-}
-
-fn find_do_method_body<'a>(
-    statements: &'a mago_syntax::ast::Sequence<'a, Statement<'a>>,
-) -> Option<&'a Block<'a>> {
-    for stmt in statements {
-        if let Statement::Namespace(ns) = stmt {
-            for inner in ns.statements() {
-                if let Statement::Class(class) = inner {
-                    return find_method_body_by_name(&class.members, "do");
-                }
-            }
-        }
-        if let Statement::Class(class) = stmt {
-            return find_method_body_by_name(&class.members, "do");
-        }
-    }
-    None
-}
-
 fn extract_maps_from_constructor(block: &Block<'_>, container: &mut Container) {
     for stmt in &block.statements {
         let Statement::Expression(expr_stmt) = stmt else {
@@ -267,13 +236,6 @@ fn extract_alias_map(expr: &Expression<'_>, container: &mut Container) {
                 .aliases
                 .insert(ServiceId::new(alias), ServiceId::new(target));
         }
-    }
-}
-
-fn extract_string_value(expr: &Expression<'_>) -> Option<String> {
-    match expr {
-        Expression::Literal(Literal::String(s)) => s.value.map(ToOwned::to_owned),
-        _ => None,
     }
 }
 
@@ -552,9 +514,7 @@ pub fn resolve_string_references(
             }
             None => {
                 for ref_id in refs {
-                    container
-                        .kernel_referenced
-                        .insert(ServiceId::new(ref_id));
+                    container.kernel_referenced.insert(ServiceId::new(ref_id));
                 }
             }
         }

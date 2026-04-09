@@ -27,7 +27,18 @@ pub fn run(project_path: &Path) -> Result<(), InitError> {
     }
 
     let composer_content = std::fs::read_to_string(&composer)?;
-    if !composer_content.contains("symfony/framework-bundle") {
+    let has_bundle = serde_json::from_str::<serde_json::Value>(&composer_content)
+        .ok()
+        .is_some_and(|json| {
+            json.get("require")
+                .and_then(|r| r.get("symfony/framework-bundle"))
+                .is_some()
+                || json
+                    .get("require-dev")
+                    .and_then(|r| r.get("symfony/framework-bundle"))
+                    .is_some()
+        });
+    if !has_bundle {
         return Err(InitError::NotSymfony(
             "composer.json does not require symfony/framework-bundle".to_owned(),
         ));
@@ -61,13 +72,20 @@ pub fn run(project_path: &Path) -> Result<(), InitError> {
 }
 
 fn extract_symfony_version(composer_content: &str) -> Option<String> {
-    let marker = "symfony/framework-bundle";
-    let idx = composer_content.find(marker)?;
-    let rest = &composer_content[idx + marker.len()..];
-    let quote_start = rest.find(|c: char| c.is_ascii_digit())?;
-    let version_part = &rest[quote_start..];
-    let end = version_part.find(|c: char| !c.is_ascii_digit() && c != '.')?;
-    Some(version_part[..end].to_owned())
+    let json: serde_json::Value = serde_json::from_str(composer_content).ok()?;
+    let version = json
+        .get("require")
+        .and_then(|r| r.get("symfony/framework-bundle"))
+        .or_else(|| {
+            json.get("require-dev")
+                .and_then(|r| r.get("symfony/framework-bundle"))
+        })
+        .and_then(|v| v.as_str())?;
+    let cleaned = version.trim_start_matches(|c: char| !c.is_ascii_digit());
+    let end = cleaned
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
+        .unwrap_or(cleaned.len());
+    Some(cleaned[..end].to_owned())
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 pub mod container;
 pub mod roles;
 pub mod routes;
+pub mod util;
 
 use std::path::Path;
 use thiserror::Error;

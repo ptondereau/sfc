@@ -32,7 +32,10 @@ fn main() {
         }
         Some(("preload", args)) => cmd_preload(args),
         Some(("optimize", args)) => cmd_optimize(args),
-        _ => unreachable!(),
+        _ => {
+            eprintln!("error: unknown subcommand");
+            std::process::exit(2);
+        }
     };
 
     match result {
@@ -136,7 +139,11 @@ fn cmd_preload(args: &clap::ArgMatches) -> Result<i32, Box<dyn std::error::Error
 #[allow(clippy::cast_precision_loss)]
 fn cmd_optimize(args: &clap::ArgMatches) -> Result<i32, Box<dyn std::error::Error>> {
     let project_path = Path::new(args.get_one::<String>("path").unwrap());
-    let level: u8 = args.get_one::<String>("level").unwrap().parse().unwrap();
+    let level: u8 = args
+        .get_one::<String>("level")
+        .expect("clap provides default")
+        .parse()
+        .expect("clap constrains to valid values");
     let dry_run = args.get_flag("dry-run");
     let restore = args.get_flag("restore");
 
