@@ -1,5 +1,6 @@
 pub mod backup;
 pub mod dead;
+pub mod preload;
 pub mod rewrite;
 pub mod unreachable;
 pub mod util;

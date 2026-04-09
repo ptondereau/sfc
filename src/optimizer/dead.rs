@@ -9,6 +9,7 @@ pub struct DeadServiceResult {
     pub files_removed: usize,
     pub bytes_freed: u64,
     pub removed_ids: Vec<String>,
+    pub removed_methods: Vec<String>,
 }
 
 /// # Errors
@@ -22,6 +23,7 @@ pub fn remove_dead_services<S: BuildHasher>(
         files_removed: 0,
         bytes_freed: 0,
         removed_ids: Vec::new(),
+        removed_methods: Vec::new(),
     };
 
     let entries = std::fs::read_dir(container_dir)?;
@@ -41,6 +43,9 @@ pub fn remove_dead_services<S: BuildHasher>(
             result.bytes_freed += meta.len();
             result.files_removed += 1;
             result.removed_ids.push(service_id);
+            result
+                .removed_methods
+                .push(name_str.trim_end_matches(".php").to_owned());
 
             if !dry_run {
                 std::fs::remove_file(&path)?;

@@ -59,7 +59,9 @@ pub fn rewrite_maps<S: BuildHasher>(
     Ok(removed_count)
 }
 
-fn find_main_container(container_dir: &Path) -> Result<std::path::PathBuf, OptimizeError> {
+/// # Errors
+/// Returns `OptimizeError` if the container directory cannot be read or no main container file is found.
+pub fn find_main_container(container_dir: &Path) -> Result<std::path::PathBuf, OptimizeError> {
     let entries = std::fs::read_dir(container_dir)?;
     for entry in entries.filter_map(Result::ok) {
         let name = entry.file_name();

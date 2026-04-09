@@ -176,12 +176,15 @@ fn cmd_optimize(args: &clap::ArgMatches) -> Result<i32, Box<dyn std::error::Erro
         .collect();
 
     let mut result = optimizer::OptimizeResult::default();
+    let mut all_removed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut all_removed_methods: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
 
     let level1 = optimizer::dead::remove_dead_services(&container_dir, &dead_ids, dry_run)?;
     result.level1_files_removed = level1.files_removed;
     result.level1_bytes_freed = level1.bytes_freed;
-    let mut all_removed: std::collections::HashSet<String> =
-        level1.removed_ids.into_iter().collect();
+    all_removed.extend(level1.removed_ids);
+    all_removed_methods.extend(level1.removed_methods);
 
     if level >= 2 {
         let unreachable =
@@ -190,10 +193,12 @@ fn cmd_optimize(args: &clap::ArgMatches) -> Result<i32, Box<dyn std::error::Erro
         result.level2_files_removed = level2.files_removed;
         result.level2_bytes_freed = level2.bytes_freed;
         all_removed.extend(level2.removed_ids);
+        all_removed_methods.extend(level2.removed_methods);
     }
 
     if !all_removed.is_empty() {
         optimizer::rewrite::rewrite_maps(&container_dir, &all_removed, dry_run)?;
+        optimizer::preload::rewrite_preload(&project.cache_dir, &all_removed_methods, dry_run)?;
     }
 
     let prefix = if dry_run { "[dry-run] " } else { "" };

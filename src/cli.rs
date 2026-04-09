@@ -70,39 +70,43 @@ pub fn build() -> Command {
                         .action(clap::ArgAction::SetTrue),
                 ),
         )
-        .subcommand(
-            Command::new("optimize")
-                .about("Strip dead and unreachable service factories from the cache")
-                .long_about("Rewrites var/cache/prod/ to remove unnecessary factory files.\n\
-                  Creates an automatic backup before any modification.\n\n\
-                  Level 1 (-O1): removes factories for services identified as dead by analyze.\n\
-                  Level 2 (-O2): also removes factories that are never called via load()\n\
-                  because all references use the ??= inline pattern.")
-                .arg(
-                    Arg::new("path")
-                        .help("Path to Symfony project root")
-                        .default_value("."),
-                )
-                .arg(
-                    Arg::new("level")
-                        .short('O')
-                        .long("level")
-                        .help("Optimization level (1=dead code, 2=dead+unreachable)")
-                        .value_parser(["1", "2"])
-                        .default_value("1"),
-                )
-                .arg(
-                    Arg::new("dry-run")
-                        .long("dry-run")
-                        .help("Show what would change without modifying files")
-                        .action(clap::ArgAction::SetTrue),
-                )
-                .arg(
-                    Arg::new("restore")
-                        .long("restore")
-                        .help("Restore from the latest backup")
-                        .action(clap::ArgAction::SetTrue),
-                ),
+        .subcommand(optimize_subcommand())
+}
+
+fn optimize_subcommand() -> Command {
+    Command::new("optimize")
+        .about("Strip dead and unreachable service factories from the cache")
+        .long_about(
+            "Rewrites var/cache/prod/ to remove unnecessary factory files.\n\
+             Creates an automatic backup before any modification.\n\n\
+             Level 1 (-O1): removes factories for services identified as dead by analyze.\n\
+             Level 2 (-O2): also removes factories that are never called via load()\n\
+             because all references use the ??= inline pattern.",
+        )
+        .arg(
+            Arg::new("path")
+                .help("Path to Symfony project root")
+                .default_value("."),
+        )
+        .arg(
+            Arg::new("level")
+                .short('O')
+                .long("level")
+                .help("Optimization level (1=dead code, 2=dead+unreachable)")
+                .value_parser(["1", "2"])
+                .default_value("1"),
+        )
+        .arg(
+            Arg::new("dry-run")
+                .long("dry-run")
+                .help("Show what would change without modifying files")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("restore")
+                .long("restore")
+                .help("Restore from the latest backup")
+                .action(clap::ArgAction::SetTrue),
         )
 }
 
