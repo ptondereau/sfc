@@ -25,6 +25,7 @@ pub struct Service {
     pub id: ServiceId,
     pub class: String,
     pub factory_file: Option<PathBuf>,
+    #[allow(dead_code)]
     pub tags: Vec<Tag>,
     pub visibility: Visibility,
     #[allow(dead_code)]
@@ -107,6 +108,7 @@ pub enum ParameterValue {
 pub struct Container {
     pub graph: ServiceGraph,
     pub services: HashMap<ServiceId, NodeIndex>,
+    #[allow(dead_code)]
     pub parameters: HashMap<String, ParameterValue>,
     pub aliases: HashMap<ServiceId, ServiceId>,
     #[allow(dead_code)]
