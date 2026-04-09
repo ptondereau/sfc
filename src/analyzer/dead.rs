@@ -59,6 +59,7 @@ impl AnalysisPass for DeadServicesPass {
                     impact: Impact::Memory {
                         estimated_bytes: 512,
                     },
+                    fix: None,
                 });
             }
         }

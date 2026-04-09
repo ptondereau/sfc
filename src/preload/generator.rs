@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::hash::BuildHasher;
 use std::io::Write;
 use std::path::Path;
 
@@ -35,6 +36,107 @@ pub fn generate(
     }
 
     Ok(limit)
+}
+
+/// Generate a preload file that preserves existing Symfony preload lines
+/// and appends only new vendor classes (topologically sorted) that are not
+/// already covered.
+///
+/// Returns `(preserved_count, added_count)`.
+///
+/// # Errors
+/// Returns `std::io::Error` if the output file cannot be created or written.
+pub fn generate_augmented<S: BuildHasher>(
+    existing_lines: &[String],
+    already_required: &HashSet<String, S>,
+    new_classes: &[PhpClass],
+    output_path: &Path,
+) -> std::io::Result<(usize, usize)> {
+    let preserved = existing_lines.len();
+
+    let normalized_existing: HashSet<&str> = already_required
+        .iter()
+        .filter_map(|rp| vendor_suffix(rp))
+        .collect();
+
+    let additions: Vec<&PhpClass> = new_classes
+        .iter()
+        .filter(|cls| {
+            let display = cls.file_path.display().to_string();
+            match vendor_suffix(&display) {
+                Some(suffix) => !normalized_existing.contains(suffix),
+                None => true,
+            }
+        })
+        .collect();
+
+    let sorted_indices = topo_sort_subset(&additions);
+
+    let mut file = std::fs::File::create(output_path)?;
+    writeln!(file, "<?php")?;
+    writeln!(file)?;
+    writeln!(
+        file,
+        "// Augmented by sfc preload — {preserved} preserved, {} added",
+        sorted_indices.len()
+    )?;
+    writeln!(file)?;
+    writeln!(file, "// --- Original Symfony preload ---")?;
+
+    for line in existing_lines {
+        writeln!(file, "{line}")?;
+    }
+
+    if !sorted_indices.is_empty() {
+        writeln!(file)?;
+        writeln!(file, "// --- Service-referenced vendor classes ---")?;
+        for &idx in &sorted_indices {
+            writeln!(
+                file,
+                "require_once '{}';",
+                additions[idx].file_path.display()
+            )?;
+        }
+    }
+
+    Ok((preserved, sorted_indices.len()))
+}
+
+fn vendor_suffix(path: &str) -> Option<&str> {
+    path.find("vendor/").map(|pos| &path[pos..])
+}
+
+fn topo_sort_subset(classes: &[&PhpClass]) -> Vec<usize> {
+    let mut graph = DiGraph::<usize, ()>::new();
+    let mut index_map: HashMap<&str, NodeIndex> = HashMap::new();
+
+    let nodes: Vec<NodeIndex> = classes
+        .iter()
+        .enumerate()
+        .map(|(i, cls)| {
+            let node = graph.add_node(i);
+            index_map.insert(cls.fqcn.as_str(), node);
+            node
+        })
+        .collect();
+
+    for (i, cls) in classes.iter().enumerate() {
+        if let Some(ref parent) = cls.parent
+            && let Some(&parent_node) = index_map.get(parent.as_str())
+        {
+            graph.add_edge(parent_node, nodes[i], ());
+        }
+        for iface in &cls.interfaces {
+            if let Some(&iface_node) = index_map.get(iface.as_str()) {
+                graph.add_edge(iface_node, nodes[i], ());
+            }
+        }
+    }
+
+    match petgraph::algo::toposort(&graph, None) {
+        Ok(order) => order.into_iter().map(|n| graph[n]).collect(),
+        Err(_) => (0..classes.len()).collect(),
+    }
 }
 
 fn topo_sort(classes: &[PhpClass]) -> Vec<usize> {
@@ -163,6 +265,84 @@ mod tests {
         let content = std::fs::read_to_string(&output).unwrap();
         let require_count = content.matches("require_once").count();
         assert_eq!(require_count, 2);
+    }
+
+    #[test]
+    fn generate_augmented_preserves_and_adds() {
+        let tmp = TempDir::new().unwrap();
+        let output = tmp.path().join("preload.php");
+
+        let existing = vec![
+            "require __DIR__.'/ContainerAbc/getMailerService.php';".to_owned(),
+            "require __DIR__.'/ContainerAbc/getCacheService.php';".to_owned(),
+        ];
+        let already: HashSet<String> = [
+            "/ContainerAbc/getMailerService.php".to_owned(),
+            "/ContainerAbc/getCacheService.php".to_owned(),
+        ]
+        .into();
+
+        let new_classes = vec![make_class(
+            "Symfony\\Component\\Mailer\\Mailer",
+            "/vendor/symfony/mailer/Mailer.php",
+            None,
+            vec![],
+        )];
+
+        let (preserved, added) =
+            generate_augmented(&existing, &already, &new_classes, &output).unwrap();
+        assert_eq!(preserved, 2);
+        assert_eq!(added, 1);
+
+        let content = std::fs::read_to_string(&output).unwrap();
+        assert!(content.contains("getMailerService.php"));
+        assert!(content.contains("getCacheService.php"));
+        assert!(content.contains("/vendor/symfony/mailer/Mailer.php"));
+        assert!(content.contains("2 preserved, 1 added"));
+    }
+
+    #[test]
+    fn generate_augmented_skips_already_required() {
+        let tmp = TempDir::new().unwrap();
+        let output = tmp.path().join("preload.php");
+
+        let existing = vec!["require __DIR__.'/../vendor/symfony/mailer/Mailer.php';".to_owned()];
+        let already: HashSet<String> = ["/../vendor/symfony/mailer/Mailer.php".to_owned()].into();
+
+        let new_classes = vec![make_class(
+            "Symfony\\Component\\Mailer\\Mailer",
+            "/project/vendor/symfony/mailer/Mailer.php",
+            None,
+            vec![],
+        )];
+
+        let (preserved, added) =
+            generate_augmented(&existing, &already, &new_classes, &output).unwrap();
+        assert_eq!(preserved, 1);
+        assert_eq!(added, 0);
+
+        let content = std::fs::read_to_string(&output).unwrap();
+        let require_count = content.matches("require").count();
+        assert_eq!(require_count, 1);
+    }
+
+    #[test]
+    fn generate_augmented_sorts_additions() {
+        let tmp = TempDir::new().unwrap();
+        let output = tmp.path().join("preload.php");
+
+        let new_classes = vec![
+            make_class("App\\Child", "/vendor/child.php", Some("App\\Base"), vec![]),
+            make_class("App\\Base", "/vendor/base.php", None, vec![]),
+        ];
+
+        let (_, added) = generate_augmented(&[], &HashSet::new(), &new_classes, &output).unwrap();
+        assert_eq!(added, 2);
+
+        let content = std::fs::read_to_string(&output).unwrap();
+        let base_pos = content.find("/vendor/base.php").unwrap();
+        let child_pos = content.find("/vendor/child.php").unwrap();
+        assert!(base_pos < child_pos);
     }
 
     #[test]

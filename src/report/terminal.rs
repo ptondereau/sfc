@@ -58,6 +58,14 @@ pub fn render(report: &Report) -> std::io::Result<()> {
                 writeln!(stdout, "      ~{:.1} KB", *estimated_bytes as f64 / 1024.0)?;
                 stdout.reset()?;
             }
+
+            if let Some(ref fix) = f.fix {
+                stdout.set_color(ColorSpec::new().set_dimmed(true))?;
+                for line in fix.lines() {
+                    writeln!(stdout, "      {line}")?;
+                }
+                stdout.reset()?;
+            }
         }
         writeln!(stdout)?;
     }

@@ -44,6 +44,7 @@ mod tests {
             service_id: None,
             file: None,
             impact: Impact::None,
+            fix: None,
         }
     }
 

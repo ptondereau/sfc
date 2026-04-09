@@ -1,4 +1,6 @@
 use std::borrow::Cow;
+use std::collections::HashSet;
+use std::hash::BuildHasher;
 use std::path::Path;
 
 use bumpalo::Bump;
@@ -21,6 +23,68 @@ pub fn collect_classes(
     }
 
     Ok(classes)
+}
+
+/// Extract FQCNs from `use` statements in factory files (`get*Service.php`)
+/// inside the container directory.
+///
+/// # Errors
+/// Returns `PreloadError::Io` if the directory cannot be read.
+pub fn extract_use_fqcns(container_dir: &Path) -> Result<HashSet<String>, PreloadError> {
+    let entries = std::fs::read_dir(container_dir).map_err(|e| PreloadError::Io {
+        path: container_dir.display().to_string(),
+        source: e,
+    })?;
+
+    let mut fqcns = HashSet::new();
+
+    for entry in entries.filter_map(Result::ok) {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if !name_str.starts_with("get") || !name_str.ends_with("Service.php") {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if let Some(fqcn) = parse_use_line(trimmed) {
+                fqcns.insert(fqcn);
+            }
+        }
+    }
+
+    Ok(fqcns)
+}
+
+fn parse_use_line(line: &str) -> Option<String> {
+    let rest = line.strip_prefix("use ")?;
+    let fqcn = rest.strip_suffix(';')?.trim();
+    if fqcn.is_empty() || fqcn.contains(' ') {
+        return None;
+    }
+    Some(fqcn.trim_start_matches('\\').to_owned())
+}
+
+/// Collect PHP classes from `vendor/` whose FQCN appears in the provided set.
+///
+/// # Errors
+/// Returns `PreloadError::Io` if the vendor directory cannot be read.
+pub fn collect_vendor_classes_for_services<S: BuildHasher>(
+    vendor_dir: &Path,
+    used_fqcns: &HashSet<String, S>,
+    exclude_namespaces: &[String],
+) -> Result<Vec<PhpClass>, PreloadError> {
+    let mut all_classes = Vec::new();
+    walk_directory(vendor_dir, &mut all_classes, exclude_namespaces)?;
+
+    let filtered: Vec<PhpClass> = all_classes
+        .into_iter()
+        .filter(|cls| used_fqcns.contains(&cls.fqcn))
+        .collect();
+
+    Ok(filtered)
 }
 
 fn walk_directory(
@@ -310,6 +374,84 @@ trait FooTrait {}
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].fqcn, "App\\Status");
+    }
+
+    #[test]
+    fn extract_use_fqcns_from_factory_files() {
+        let tmp = TempDir::new().unwrap();
+        write_php(
+            tmp.path(),
+            "getMailerService.php",
+            r#"<?php
+
+use Symfony\Component\Mailer\Mailer;
+use Symfony\Component\Mailer\Transport\Smtp\SmtpTransport;
+
+return function () {
+    return new Mailer(new SmtpTransport());
+};
+"#,
+        );
+        write_php(
+            tmp.path(),
+            "getCacheService.php",
+            r#"<?php
+
+use Symfony\Component\Cache\Adapter\TagAwareAdapter;
+
+return function () {
+    return new TagAwareAdapter();
+};
+"#,
+        );
+        write_php(tmp.path(), "notAFactory.php", "<?php\nuse App\\Ignored;\n");
+
+        let fqcns = extract_use_fqcns(tmp.path()).unwrap();
+        assert_eq!(fqcns.len(), 3);
+        assert!(fqcns.contains("Symfony\\Component\\Mailer\\Mailer"));
+        assert!(fqcns.contains("Symfony\\Component\\Mailer\\Transport\\Smtp\\SmtpTransport"));
+        assert!(fqcns.contains("Symfony\\Component\\Cache\\Adapter\\TagAwareAdapter"));
+        assert!(!fqcns.contains("App\\Ignored"));
+    }
+
+    #[test]
+    fn parse_use_line_strips_leading_backslash() {
+        assert_eq!(
+            super::parse_use_line("use \\App\\Foo;"),
+            Some("App\\Foo".to_owned())
+        );
+    }
+
+    #[test]
+    fn parse_use_line_rejects_non_use() {
+        assert_eq!(super::parse_use_line("class Foo {}"), None);
+    }
+
+    #[test]
+    fn parse_use_line_rejects_use_function() {
+        assert_eq!(super::parse_use_line("use function strlen;"), None);
+    }
+
+    #[test]
+    fn collect_vendor_classes_filters_by_fqcn() {
+        let tmp = TempDir::new().unwrap();
+        write_php(
+            tmp.path(),
+            "Mailer.php",
+            "<?php\nnamespace Symfony\\Component\\Mailer;\nclass Mailer {}\n",
+        );
+        write_php(
+            tmp.path(),
+            "Logger.php",
+            "<?php\nnamespace Monolog;\nclass Logger {}\n",
+        );
+
+        let mut used = std::collections::HashSet::new();
+        used.insert("Symfony\\Component\\Mailer\\Mailer".to_owned());
+
+        let result = collect_vendor_classes_for_services(tmp.path(), &used, &[]).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].fqcn, "Symfony\\Component\\Mailer\\Mailer");
     }
 
     #[test]

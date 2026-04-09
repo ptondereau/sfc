@@ -54,6 +54,7 @@ impl AnalysisPass for ContainerWeightPass {
             impact: Impact::Memory {
                 estimated_bytes: total,
             },
+            fix: None,
         }];
 
         for (id, weight) in service_weights.iter().take(5) {
@@ -66,6 +67,7 @@ impl AnalysisPass for ContainerWeightPass {
                 impact: Impact::Memory {
                     estimated_bytes: *weight,
                 },
+                fix: None,
             });
         }
 

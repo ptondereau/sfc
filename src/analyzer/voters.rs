@@ -30,6 +30,10 @@ impl AnalysisPass for AlwaysLoadedVotersPass {
                     service_id: Some(service.id.clone()),
                     file: service.factory_file.clone(),
                     impact: Impact::Startup { estimated_ms: 1 },
+                    fix: Some(format!(
+                        "# config/services.yaml\nservices:\n    {}:\n        lazy: true",
+                        service.class
+                    )),
                 });
             }
         }

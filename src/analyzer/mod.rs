@@ -21,6 +21,7 @@ pub struct Finding {
     pub service_id: Option<ServiceId>,
     pub file: Option<PathBuf>,
     pub impact: Impact,
+    pub fix: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

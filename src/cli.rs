@@ -68,6 +68,12 @@ pub fn build() -> Command {
                         .long("no-vendor")
                         .help("Skip scanning vendor/ directory")
                         .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("augment")
+                        .long("augment")
+                        .help("Augment the existing Symfony preload instead of replacing it (default when existing preload is found)")
+                        .action(clap::ArgAction::SetTrue),
                 ),
         )
         .subcommand(optimize_subcommand())
@@ -172,6 +178,15 @@ mod tests {
             .expect("should parse");
         let (_, sub) = m.subcommand().unwrap();
         assert!(sub.get_flag("no-vendor"));
+    }
+
+    #[test]
+    fn preload_with_augment() {
+        let m = build()
+            .try_get_matches_from(["sfc", "preload", "--augment"])
+            .expect("should parse");
+        let (_, sub) = m.subcommand().unwrap();
+        assert!(sub.get_flag("augment"));
     }
 
     #[test]

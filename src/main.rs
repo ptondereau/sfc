@@ -103,6 +103,7 @@ fn cmd_preload(args: &clap::ArgMatches) -> Result<i32, Box<dyn std::error::Error
     let project_path = Path::new(args.get_one::<String>("path").unwrap());
     let output_override = args.get_one::<String>("output");
     let no_vendor = args.get_flag("no-vendor");
+    let augment_flag = args.get_flag("augment");
 
     let mut config = config::Config::load(project_path)?;
 
@@ -115,6 +116,82 @@ fn cmd_preload(args: &clap::ArgMatches) -> Result<i32, Box<dyn std::error::Error
 
     let project = project::detect(project_path, &config)?;
 
+    let output_path = if config.preload.output.is_relative() {
+        project.root.join(&config.preload.output)
+    } else {
+        config.preload.output.clone()
+    };
+
+    let existing_preload = preload::find_symfony_preload(&project.cache_dir);
+    let use_augment = augment_flag || existing_preload.is_some();
+
+    if use_augment {
+        cmd_preload_augment(&project, &config, existing_preload.as_deref(), &output_path)
+    } else {
+        cmd_preload_full(&project, &config, &output_path)
+    }
+}
+
+fn cmd_preload_augment(
+    project: &project::SymfonyProject,
+    config: &config::Config,
+    existing_preload_path: Option<&Path>,
+    output_path: &Path,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let container_dir =
+        project::find_container_dir(&project.cache_dir).ok_or("no Container directory found")?;
+
+    // Collect FQCNs from two sources:
+    // 1. Service class names from the parsed dependency graph (instantiated classes)
+    // 2. Use statements from factory files (type hints, utilities)
+    let container = parser::parse_container(&project.cache_dir)?;
+    let mut used_fqcns = preload::collector::extract_use_fqcns(&container_dir)?;
+    for node_idx in container.graph.node_indices() {
+        let class = &container.graph[node_idx].class;
+        if !class.is_empty() {
+            used_fqcns.insert(class.clone());
+        }
+    }
+
+    let (existing_lines, already_required) = match existing_preload_path {
+        Some(path) => {
+            let existing = preload::ExistingPreload::parse(path)?;
+            (existing.require_lines, existing.required_paths)
+        }
+        None => (Vec::new(), std::collections::HashSet::new()),
+    };
+
+    let vendor_dir = project.root.join("vendor");
+    let new_classes = if config.preload.scan_vendor && vendor_dir.is_dir() {
+        preload::collector::collect_vendor_classes_for_services(
+            &vendor_dir,
+            &used_fqcns,
+            &config.preload.exclude_namespaces,
+        )?
+    } else {
+        Vec::new()
+    };
+
+    let (preserved, added) = preload::generator::generate_augmented(
+        &existing_lines,
+        &already_required,
+        &new_classes,
+        output_path,
+    )?;
+
+    println!(
+        "Generated {} — {preserved} preserved, {added} vendor classes added ({} service FQCNs matched)",
+        output_path.display(),
+        used_fqcns.len()
+    );
+    Ok(0)
+}
+
+fn cmd_preload_full(
+    project: &project::SymfonyProject,
+    config: &config::Config,
+    output_path: &Path,
+) -> Result<i32, Box<dyn std::error::Error>> {
     let mut scan_dirs: Vec<&Path> = vec![&project.cache_dir];
     let vendor_dir = project.root.join("vendor");
     if config.preload.scan_vendor {
@@ -123,14 +200,7 @@ fn cmd_preload(args: &clap::ArgMatches) -> Result<i32, Box<dyn std::error::Error
 
     let classes =
         preload::collector::collect_classes(&scan_dirs, &config.preload.exclude_namespaces)?;
-
-    let output_path = if config.preload.output.is_relative() {
-        project.root.join(&config.preload.output)
-    } else {
-        config.preload.output.clone()
-    };
-
-    let count = preload::generator::generate(&classes, &output_path, config.preload.max_classes)?;
+    let count = preload::generator::generate(&classes, output_path, config.preload.max_classes)?;
 
     println!("Generated {} with {count} classes", output_path.display());
     Ok(0)

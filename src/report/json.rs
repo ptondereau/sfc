@@ -26,6 +26,8 @@ struct JsonFinding<'a> {
     service_id: Option<&'a str>,
     file: Option<String>,
     impact: Option<JsonImpact>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fix: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -76,5 +78,6 @@ fn to_json_finding(f: &crate::analyzer::Finding) -> JsonFinding<'_> {
             }),
             Impact::None => None,
         },
+        fix: f.fix.as_deref(),
     }
 }
