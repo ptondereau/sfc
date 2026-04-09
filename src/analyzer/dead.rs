@@ -33,6 +33,10 @@ impl AnalysisPass for DeadServicesPass {
                 continue;
             }
 
+            if container.kernel_referenced.contains(service_id) {
+                continue;
+            }
+
             let in_degree = container
                 .graph
                 .neighbors_directed(node_idx, Direction::Incoming)

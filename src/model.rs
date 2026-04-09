@@ -1,5 +1,5 @@
 use petgraph::graph::{DiGraph, NodeIndex};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 pub type ServiceGraph = DiGraph<Service, EdgeKind>;
@@ -112,6 +112,7 @@ pub struct Container {
     #[allow(dead_code)]
     pub source_path: PathBuf,
     pub routes: Vec<RouteDefinition>,
+    pub kernel_referenced: HashSet<ServiceId>,
 }
 
 impl Container {
@@ -124,6 +125,7 @@ impl Container {
             aliases: HashMap::new(),
             source_path,
             routes: vec![],
+            kernel_referenced: HashSet::new(),
         }
     }
 

@@ -535,20 +535,27 @@ pub fn resolve_string_references(
             continue;
         }
 
-        let Some(from_id) = detect_factory_service_id(program.statements.as_slice()) else {
-            continue;
-        };
-
         let mut refs = Vec::new();
         collect_all_string_literals(program.statements.as_slice(), &known_ids, &mut refs);
 
-        for ref_id in refs {
-            if ref_id != from_id {
-                container.add_dependency(
-                    &ServiceId::new(&from_id),
-                    &ServiceId::new(ref_id),
-                    EdgeKind::Constructor,
-                );
+        match detect_factory_service_id(program.statements.as_slice()) {
+            Some(from_id) => {
+                for ref_id in refs {
+                    if ref_id != from_id {
+                        container.add_dependency(
+                            &ServiceId::new(&from_id),
+                            &ServiceId::new(ref_id),
+                            EdgeKind::Constructor,
+                        );
+                    }
+                }
+            }
+            None => {
+                for ref_id in refs {
+                    container
+                        .kernel_referenced
+                        .insert(ServiceId::new(ref_id));
+                }
             }
         }
     }
