@@ -23,11 +23,18 @@ pub fn rewrite_preload<S: BuildHasher>(
     };
 
     let content = std::fs::read_to_string(&preload_path)?;
+    let line_count = content.lines().count();
     let mut stripped = 0;
-    let mut new_lines = Vec::new();
+    let mut new_lines = Vec::with_capacity(line_count);
+
+    // Pre-build filename suffixes to avoid format!() per line
+    let suffixes: Vec<String> = removed_method_names
+        .iter()
+        .map(|m| format!("{m}.php"))
+        .collect();
 
     for line in content.lines() {
-        if is_removed_require(line, removed_method_names) {
+        if is_removed_require(line, &suffixes) {
             stripped += 1;
             continue;
         }
@@ -57,10 +64,7 @@ fn find_preload(cache_dir: &Path) -> Option<std::path::PathBuf> {
     None
 }
 
-fn is_removed_require<S: BuildHasher>(
-    line: &str,
-    removed_method_names: &HashSet<String, S>,
-) -> bool {
+fn is_removed_require(line: &str, suffixes: &[String]) -> bool {
     let trimmed = line.trim();
     if !trimmed.starts_with("require") {
         return false;
@@ -68,13 +72,9 @@ fn is_removed_require<S: BuildHasher>(
     // Match patterns like:
     //   require __DIR__.'/Container.../getXService.php';
     //   require_once './var/cache/prod/Container.../getXService.php';
-    for method in removed_method_names {
-        let filename_pattern = format!("{method}.php");
-        if trimmed.contains(&filename_pattern) {
-            return true;
-        }
-    }
-    false
+    suffixes
+        .iter()
+        .any(|suffix| trimmed.contains(suffix.as_str()))
 }
 
 #[cfg(test)]

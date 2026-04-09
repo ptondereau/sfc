@@ -53,30 +53,31 @@ pub fn find_unreachable_factories<S: BuildHasher>(
     already_removed: &HashSet<String, S>,
 ) -> Result<HashSet<String>, OptimizeError> {
     let mut factories: Vec<(String, String)> = Vec::new();
+    let mut all_content = String::new();
 
+    // Single pass: collect factory metadata and concatenate PHP content
     let entries = std::fs::read_dir(container_dir)?;
     for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("php") {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
         if name_str.starts_with("get") && name_str.ends_with("Service.php") {
             let method_name = name_str.trim_end_matches(".php").to_owned();
-            if let Some(id) = identify_factory_service(&entry.path())
+            if let Some(id) = identify_factory_service(&path)
                 && !already_removed.contains(&id)
             {
                 factories.push((method_name, id));
             }
         }
-    }
 
-    // Collect all PHP content for load() pattern search
-    let mut all_content = String::new();
-    let entries = std::fs::read_dir(container_dir)?;
-    for entry in entries.filter_map(Result::ok) {
-        if entry.path().extension().and_then(|e| e.to_str()) == Some("php")
-            && let Ok(content) = std::fs::read_to_string(entry.path())
-        {
-            all_content.push_str(&content);
-        }
+        all_content.push_str(&content);
     }
 
     // fileMap entries are reachable via Container::make() dynamic dispatch

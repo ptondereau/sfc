@@ -20,7 +20,7 @@ pub fn rewrite_maps<S: BuildHasher>(
         .collect();
 
     let mut removed_count = 0;
-    let mut new_lines = Vec::new();
+    let mut new_lines = Vec::with_capacity(content.lines().count());
     let mut in_map = false;
 
     for line in content.lines() {
