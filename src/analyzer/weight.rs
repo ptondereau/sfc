@@ -1,13 +1,24 @@
+use std::collections::HashMap;
+
 use crate::model::Container;
 
+use super::introspect::{self, ClassInfo, ClassResolver};
 use super::{AnalysisPass, Finding, Impact, Severity};
 
-const SERVICE_BASE_BYTES: u64 = 256;
-const ARG_REF_BYTES: u64 = 64;
-const TAG_BYTES: u64 = 128;
-const PARAMETER_BYTES: u64 = 96;
+const FALLBACK_BYTES: u64 = 256;
 
-pub struct ContainerWeightPass;
+pub struct ContainerWeightPass {
+    resolver: ClassResolver,
+}
+
+impl ContainerWeightPass {
+    #[must_use]
+    pub fn new(project_root: &std::path::Path) -> Self {
+        Self {
+            resolver: ClassResolver::from_project(project_root),
+        }
+    }
+}
 
 impl AnalysisPass for ContainerWeightPass {
     fn name(&self) -> &'static str {
@@ -15,33 +26,35 @@ impl AnalysisPass for ContainerWeightPass {
     }
 
     fn run(&self, container: &Container) -> Vec<Finding> {
+        let mut class_cache: HashMap<String, Option<ClassInfo>> = HashMap::new();
         let mut total: u64 = 0;
-        let mut service_weights: Vec<(&str, u64)> = vec![];
+        let mut service_weights: Vec<(&str, u64, u32)> = vec![];
 
         for node_idx in container.graph.node_indices() {
             let service = &container.graph[node_idx];
-            let edge_count = container
-                .graph
-                .edges_directed(node_idx, petgraph::Direction::Outgoing)
-                .count() as u64;
 
-            let weight = SERVICE_BASE_BYTES
-                + edge_count * ARG_REF_BYTES
-                + service.tags.len() as u64 * TAG_BYTES;
+            let (bytes, props) = if service.class.is_empty() {
+                (FALLBACK_BYTES, 0)
+            } else {
+                resolve_with_parents(&service.class, &self.resolver, &mut class_cache)
+            };
 
-            total += weight;
-            service_weights.push((&service.id.0, weight));
+            total += bytes;
+            service_weights.push((&service.id.0, bytes, props));
         }
 
-        total += container.parameters.len() as u64 * PARAMETER_BYTES;
-
         service_weights.sort_by(|a, b| b.1.cmp(&a.1));
+
+        let introspected = service_weights
+            .iter()
+            .filter(|(_, _, props)| *props > 0)
+            .count();
 
         let mut findings = vec![Finding {
             pass: self.name(),
             severity: Severity::Info,
             message: format!(
-                "container has {} services, estimated memory: {:.1} KB",
+                "container has {} services, estimated memory: {:.1} KB ({introspected} classes introspected)",
                 container.service_count(),
                 {
                     #[allow(clippy::cast_precision_loss)]
@@ -58,16 +71,20 @@ impl AnalysisPass for ContainerWeightPass {
             fix: None,
         }];
 
-        for (id, weight) in service_weights.iter().take(5) {
+        for &(id, weight, props) in service_weights.iter().take(5) {
             findings.push(Finding {
                 pass: self.name(),
                 severity: Severity::Info,
-                message: format!("service `{id}`: ~{weight} bytes"),
-                service_id: Some(crate::model::ServiceId::new(*id)),
+                message: if props > 0 {
+                    format!("service `{id}`: ~{weight} bytes ({props} properties)")
+                } else {
+                    format!("service `{id}`: ~{weight} bytes")
+                },
+                service_id: Some(crate::model::ServiceId::new(id)),
                 file: None,
                 span: None,
                 impact: Impact::Memory {
-                    estimated_bytes: *weight,
+                    estimated_bytes: weight,
                 },
                 fix: None,
             });
@@ -77,12 +94,44 @@ impl AnalysisPass for ContainerWeightPass {
     }
 }
 
+fn resolve_with_parents(
+    fqcn: &str,
+    resolver: &ClassResolver,
+    cache: &mut HashMap<String, Option<ClassInfo>>,
+) -> (u64, u32) {
+    let mut total_props: u32 = 0;
+    let mut current = Some(fqcn.to_owned());
+
+    while let Some(ref class_name) = current {
+        if !cache.contains_key(class_name) {
+            let info = resolver
+                .resolve(class_name)
+                .and_then(|path| introspect::introspect_class(&path));
+            cache.insert(class_name.clone(), info);
+        }
+
+        match cache.get(class_name) {
+            Some(Some(info)) => {
+                total_props += info.property_count;
+                current = info.parent.clone();
+            }
+            _ => break,
+        }
+    }
+
+    if total_props > 0 {
+        (introspect::estimate_object_bytes(total_props), total_props)
+    } else {
+        (FALLBACK_BYTES, 0)
+    }
+}
+
 #[cfg(test)]
 #[allow(unused_must_use)]
 mod tests {
     use super::*;
     use crate::model::*;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     fn make_service(id: &str, class: &str) -> Service {
         Service {
@@ -101,25 +150,11 @@ mod tests {
         let mut c = Container::new(PathBuf::from("/tmp"));
         c.add_service(make_service("a", "A"));
         c.add_service(make_service("b", "B"));
-        let findings = ContainerWeightPass.run(&c);
+        // No real project root, so resolver won't find files → fallback
+        let pass = ContainerWeightPass::new(Path::new("/nonexistent"));
+        let findings = pass.run(&c);
         assert!(!findings.is_empty());
         assert!(findings[0].message.contains("2 services"));
-    }
-
-    #[test]
-    fn weight_includes_parameters() {
-        let mut c = Container::new(PathBuf::from("/tmp"));
-        c.add_service(make_service("a", "A"));
-        c.parameters.insert(
-            "kernel.debug".to_owned(),
-            ParameterValue::Scalar("false".to_owned()),
-        );
-        let findings = ContainerWeightPass.run(&c);
-        let total = match &findings[0].impact {
-            Impact::Memory { estimated_bytes } => *estimated_bytes,
-            _ => panic!("expected memory impact"),
-        };
-        assert!(total > SERVICE_BASE_BYTES);
     }
 
     #[test]
@@ -128,7 +163,19 @@ mod tests {
         for i in 0..10 {
             c.add_service(make_service(&format!("svc_{i}"), &format!("Class{i}")));
         }
-        let findings = ContainerWeightPass.run(&c);
+        let pass = ContainerWeightPass::new(Path::new("/nonexistent"));
+        let findings = pass.run(&c);
         assert!(findings.len() <= 6);
+    }
+
+    #[test]
+    fn fallback_for_unresolvable_class() {
+        let (bytes, props) = resolve_with_parents(
+            "NonExistent\\Class",
+            &ClassResolver::from_project(Path::new("/nonexistent")),
+            &mut HashMap::new(),
+        );
+        assert_eq!(bytes, FALLBACK_BYTES);
+        assert_eq!(props, 0);
     }
 }

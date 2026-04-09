@@ -75,7 +75,7 @@ fn cmd_analyze(args: &clap::ArgMatches) -> Result<i32, Box<dyn std::error::Error
 
     let passes: Vec<Box<dyn AnalysisPass>> = vec![
         Box::new(DeadServicesPass),
-        Box::new(ContainerWeightPass),
+        Box::new(ContainerWeightPass::new(&project.root)),
         Box::new(UnusedListenersPass::new(&project.src_dir)),
         Box::new(AlwaysLoadedVotersPass),
         Box::new(DeadRoutesPass),
